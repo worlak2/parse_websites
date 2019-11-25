@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
 from multiprocessing import Pool
 import multiprocessing.pool
-from database import insert, db,check_data
+from database import insert, db, check_data
 import os
 import sys
 from pathlib import Path
@@ -58,13 +58,14 @@ class BaseParse(ABC):
         pass
 
     @abstractmethod
-    def check_new(self):
+    def parse_new(self):
         pass
 
-    def insert_to_database(self, data):
+    @staticmethod
+    def insert_to_database(data):
         with db.atomic() as transaction:
             try:
-                for i in data:insert(**i)
+                for i in data: insert(**i)
             except Exception as e:
                 print(e)
                 transaction.rollback()
@@ -88,7 +89,8 @@ class BaseImageSave:
     def __init__(self, path):
         self.base_path = path
 
-    def rename_image(self, article):
+    @staticmethod
+    def rename_image(article):
         return f'{hash(article)}.jpg'
 
     def download_image(self, url, article):
@@ -143,12 +145,14 @@ class ParseAirforce(BaseParse):
         parsed_article = ParseAirforceArticle().parse_article(args, data)
         return parsed_article
 
-    def check_new(self):
+    def parse_new(self):
         sys.setrecursionlimit(25000)
-        to_parse=[]
-        with Pool(20) as p:
-            result = p.map(self.get_articles, ['https://www.airforce-technology.com/news/page/{0}/'.format(i) for i in range(1,50)])
-            for i in result:
+        to_parse = []
+        with Pool(self._process_count) as p:
+            parsed_articles = p.map(self.get_articles,
+                                    ['https://www.airforce-technology.com/news/page/{0}/'.format(i) for i in
+                                     range(1, 50)])
+            for i in parsed_articles:
                 for j in i:
                     if not check_data(j['href']):
                         to_parse.append(j)
@@ -166,5 +170,4 @@ class ParseAirforce(BaseParse):
 if __name__ == '__main__':
     result = ParseAirforce()
     # result.parse_all_data()
-    result.check_new()
-
+    result.parse_new()
