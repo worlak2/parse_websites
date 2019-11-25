@@ -1,28 +1,14 @@
-from abc import ABC, abstractmethod
-
-from bs4 import BeautifulSoup
-from multiprocessing import Pool
-import multiprocessing.pool
-from database import insert, db, check_data
 import os
-import sys
-from pathlib import Path
 import shutil
+import sys
+from abc import ABC, abstractmethod
+from multiprocessing import Pool
+from pathlib import Path
+
 import requests
+from bs4 import BeautifulSoup
 
-
-class NoDaemonProcess(multiprocessing.Process):
-    def _get_daemon(self):
-        return False
-
-    def _set_daemon(self, value):
-        pass
-
-    daemon = property(_get_daemon, _set_daemon)
-
-
-class MyPool(multiprocessing.pool.Pool):
-    Process = NoDaemonProcess
+from database import insert, db, check_data
 
 
 class BaseParse(ABC):
@@ -41,9 +27,8 @@ class BaseParse(ABC):
         else:
             raise ValueError(f'Failed parse value {value}. Failed format.')
 
-    @abstractmethod
     def get_data_site(self, url):
-        pass
+        return requests.get(url).text
 
     @abstractmethod
     def get_articles(self, url):
@@ -51,10 +36,6 @@ class BaseParse(ABC):
 
     @abstractmethod
     def parse_article(self, url):
-        pass
-
-    @abstractmethod
-    def parse_all_data(self):
         pass
 
     @abstractmethod
@@ -69,13 +50,6 @@ class BaseParse(ABC):
             except Exception as e:
                 print(e)
                 transaction.rollback()
-
-    def parse_data(self, url):
-        parsed_article = self.get_articles(url)
-        if parsed_article:
-            with Pool(self._process_count) as p:
-                release = p.map(self.parse_article, [{'url': i['href'], 'title': i.text} for i in parsed_article])
-            self.insert_to_database(release)
 
 
 class BaseParseArticle(ABC):
@@ -131,9 +105,6 @@ class ParseAirforceArticle(BaseParseArticle):
 
 class ParseAirforce(BaseParse):
 
-    def get_data_site(self, url):
-        return requests.get(url).text
-
     def get_articles(self, url):
         article = BeautifulSoup(self.get_data_site(url), 'lxml').find('ul',
                                                                       {'class': 'category_list_new pal list'}).findAll(
@@ -159,15 +130,49 @@ class ParseAirforce(BaseParse):
             release = p.map(self.parse_article, [{'url': i['href'], 'title': i.text} for i in to_parse])
         self.insert_to_database(release)
 
-    def parse_all_data(self):
-        pool = MyPool(6)
-        pool.map(self.parse_data,
-                 [f'https://www.airforce-technology.com/news/page/{i}/' for i in range(1, 50)])
-        pool.close()
-        pool.join()
+
+class ParseAircosmosArticle(BaseParseArticle):
+    def parse_article(self, args, data):
+        parsed_list = data.find('div', {'class': 'article-content'}).text
+        date_publication = data.find('time')
+        image = data.find('div', {'class': 'cover'}).findAll('img')
+        image = image[0] if image else None
+        work_with_image = BaseImageSave('Aircosmos').save_image(image['src'], args['title']) if image else None
+
+        return {'url': args['url'], 'title': args['title'], 'images_path': work_with_image,
+                'data_site': parsed_list.strip(), 'date_upload': date_publication.text}
+
+
+class ParseAircosmos(BaseParse):
+    def get_articles(self, url):
+        article = BeautifulSoup(self.get_data_site(url), 'lxml').find('div', {'class': 'row'}).findAll('div', {
+            'class': 'col-md-6'})
+        article_list = []
+        for i in article[4:]:
+            href = i.find(href=True)
+            title = i.find('h2', {'class': 'title'})
+            article_list.append(['https://aircosmosinternational.com' + href['href'], title.text])
+        return article_list
+
+    def parse_article(self, args):
+        data = BeautifulSoup(self.get_data_site(url=args['url']), 'lxml')
+        parsed_article = ParseAircosmosArticle().parse_article(args, data)
+        return parsed_article
+
+    def parse_new(self):
+        sys.setrecursionlimit(25000)
+        to_parse = []
+        with Pool(self._process_count) as p:
+            parsed_articles = self.get_articles('https://aircosmosinternational.com/actualite/industry')
+            for i in parsed_articles:
+                if not check_data(i[0]):
+                    to_parse.append(i)
+            release = p.map(self.parse_article, [{'url': i[0], 'title': i[1]} for i in to_parse])
+        self.insert_to_database(release)
 
 
 if __name__ == '__main__':
-    result = ParseAirforce()
-    # result.parse_all_data()
-    result.parse_new()
+    print('Starting....')
+    ParseAirforce().parse_new()
+    ParseAircosmos().parse_new()
+    print('Finish')
